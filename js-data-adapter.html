@@ -1,3 +1,4 @@
+
 <script>
 /* =========================================================================
    FPI Intelligence Hub — DATA ADAPTER (the single data access layer)
@@ -121,6 +122,7 @@
       category: row.category || 'Uncategorized',
       icon: CATEGORY_ICONS[row.category] || 'file',
       purpose: row.remarks || row.description || '',
+      remarks: row.remarks || '',           // raw Remarks — the Edit drawer edits this, not the purpose fallback
       inputs: row.inputs || [],
       returns: row.returns || [],
       useCases: row.useCases || [],
@@ -130,7 +132,12 @@
       sql: row.sql || '',
       lastUpdated: row.lastUpdated || '',
       updatedBy: row.updatedBy || '',
-      status: row.status || ''            // always 'Production' today; kept for future admin views
+      status: row.status || '',           // always 'Production' today; kept for future admin views
+      version: row.version || '1.0',      // current version — source of truth is the Queries sheet's Version column
+      createdBy: row.createdBy || '',     // optional audit columns — UI shows them only if present
+      createdDate: row.createdDate || '',
+      approvedBy: row.approvedBy || '',
+      approvedDate: row.approvedDate || ''
     };
   }
 
@@ -229,6 +236,61 @@
       }
       results.sort((a, b) => a.score - b.score || a.query.name.localeCompare(b.query.name));
       return results;
+    },
+
+    /* ---------- editing (admins only; server-enforced) ---------- */
+
+    isAdmin() { return !!(this.user && this.user.isAdmin); },
+
+    /**
+     * Save edits to a query via the single Code.gs write path, saveQuery().
+     * edits = { name?, description?, category?, status?, link?, remarks?,
+     * inputs?, returns?, dataSources?, tags?, sql?, useCases? } — plain
+     * strings; multi-value fields one item per line.
+     *
+     * The server diffs against the sheet, writes changed cells, appends
+     * one Change Log row per changed field, and bumps the version. On
+     * success the in-memory catalog is updated from the returned row, so
+     * the UI refreshes without a reload. A query whose Status moves off
+     * Production is removed from the catalog (it is no longer served).
+     */
+    async saveQuery(id, edits) {
+      if (this.mode !== 'gas') {
+        throw new Error('Editing requires the Google Sheets backend (unavailable in local mock mode).');
+      }
+      const result = await gasCall('saveQuery', id, edits);
+      if (result && result.saved && result.query) {
+        const updated = normalizeQuery(result.query);
+        const repo = repos[result.query.repository];
+        if (repo) {
+          const idx = repo.queries.findIndex((q) => q.id === id);
+          const production = (result.query.status || 'Production').toLowerCase() === 'production';
+          if (idx >= 0 && production) repo.queries[idx] = updated;
+          else if (idx >= 0 && !production) repo.queries.splice(idx, 1);
+        }
+      }
+      return result;
+    },
+
+    /**
+     * Create a new query via Code.gs createQuery(). fields must include
+     * repository; the server generates the Query ID, defaults Status to
+     * Draft, and initializes Version to 1.0. On success the in-memory
+     * catalog is refreshed immediately: Production queries are inserted
+     * into their repo's list (non-Production ones aren't served, so they
+     * only exist in the Sheet until promoted).
+     */
+    async createQuery(fields) {
+      if (this.mode !== 'gas') {
+        throw new Error('Creating queries requires the Google Sheets backend (unavailable in local mock mode).');
+      }
+      const result = await gasCall('createQuery', fields);
+      if (result && result.created && result.query) {
+        const repo = repos[result.query.repository];
+        const production = (result.query.status || '').toLowerCase() === 'production';
+        if (repo && production) repo.queries.push(normalizeQuery(result.query));
+      }
+      return result;
     },
 
     /* ---------- favorites ---------- */
