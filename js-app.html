@@ -1,3 +1,4 @@
+
 <script>
 /* =========================================================================
    FPI Intelligence Hub — Application (UI layer only)
@@ -60,6 +61,9 @@
     arrowLeft: I('<line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>'),
     copy: I('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
     external: I('<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>'),
+    edit: I('<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>'),
+    plus: I('<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>'),
+    lock: I('<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'),
     checkCircle: I('<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>')
   };
 
@@ -88,6 +92,29 @@
 
   function applyTheme() {
     document.documentElement.dataset.theme = FPI.store.theme;
+  }
+
+  /* Admin-gated buttons are ALWAYS rendered; for non-admins they show a
+     lock icon and explain themselves on hover/click. This is UX only —
+     Code.gs rejects non-admin writes regardless of what the client does. */
+  const NO_PERMISSION_MSG = "You don't have permission to edit queries.";
+
+  function gatedBtnHTML(opts) {   // { action, label, icon, classes?, id? }
+    const admin = D().isAdmin();
+    const classes = `btn${opts.classes ? ' ' + opts.classes : ''}${admin ? '' : ' locked'}`;
+    const idAttr = opts.id ? ` data-id="${opts.id}"` : '';
+    const lockAttr = admin ? '' : ' data-locked="1"';
+    const title = admin ? opts.label : NO_PERMISSION_MSG;
+    const icon = admin ? opts.icon : ICONS.lock;
+    return `<button class="${classes}" data-action="${opts.action}"${idAttr}${lockAttr} title="${title}">${icon} ${opts.label}</button>`;
+  }
+
+  function newQueryBtnHTML() {
+    return gatedBtnHTML({ action: 'new-query', label: 'New Query', icon: ICONS.plus, classes: 'sm' });
+  }
+
+  function editBtnHTML(id) {
+    return gatedBtnHTML({ action: 'edit-query', label: 'Edit', icon: ICONS.edit, id });
   }
 
   function themeToggleHTML() {
@@ -192,6 +219,7 @@
       <div class="topbar">
         <span class="brand"><span class="brand-mark">FPI</span> Intelligence Hub</span>
         <span class="topbar-spacer"></span>
+        ${newQueryBtnHTML()}
         ${themeToggleHTML()}
       </div>
       <div class="landing">
@@ -338,6 +366,7 @@
           <a class="back-link" href="#/" data-action="go-home">${ICONS.arrowLeft} All Repositories</a>
           <span class="topbar-spacer"></span>
           <span class="brand"><span class="brand-mark">FPI</span></span>
+          ${newQueryBtnHTML()}
           ${themeToggleHTML()}
         </div>
         <div class="repo-header">
@@ -441,6 +470,7 @@
           <button class="star-btn${D().isFavorite(q.id) ? ' faved' : ''}" data-action="toggle-fav" data-id="${q.id}" title="Favorite">${ICONS.star}</button>
         </div>
         <div class="detail-actions">
+          ${editBtnHTML(q.id)}
           ${q.link ? `<a class="btn" href="${esc(q.link)}" target="_blank" rel="noopener">${ICONS.external} Open Link</a>` : ''}
           <button class="btn primary" data-action="copy-query" data-id="${q.id}">${ICONS.copy} Copy Query</button>
         </div>
@@ -495,7 +525,193 @@
         <span>Last Updated: <b>${esc(q.lastUpdated)}</b></span>
         <span>Updated By: <b>${esc(q.updatedBy)}</b></span>
         <span>Query ID: <b>${esc(q.id)}</b></span>
+        <span>Version: <b>${esc(q.version)}</b></span>
+        ${q.approvedBy ? `<span>Approved By: <b>${esc(q.approvedBy)}</b></span>` : ''}
+        ${q.approvedDate ? `<span>Approved Date: <b>${esc(q.approvedDate)}</b></span>` : ''}
       </div>`;
+  }
+
+  /* ============================== Edit Drawer (admin) ==============================
+     Slide-over form for editing a query's sheet metadata. Pre-populated from
+     the loaded catalog (which mirrors the Google Sheet); saving goes through
+     the adapter's saveQuery() → Code.gs saveQuery(), the single write path
+     that diffs fields, updates the Queries tab, and appends Change Log rows. */
+
+  const STATUS_OPTIONS = ['Production', 'Draft', 'Review', 'Deprecated'];
+
+  const BLANK_QUERY = () => ({
+    id: '', name: '', desc: '', category: '', status: 'Draft', link: '',
+    remarks: '', inputs: [], returns: [], dataSources: [], tags: [], useCases: [], sql: ''
+  });
+
+  function openEditDrawer(repo, q) { openDrawer_('edit', repo, q); }
+
+  /* Create mode: same drawer, blank fields, Repository select (required),
+     Status defaulting to Draft. The Query ID is generated server-side on
+     save (next sequential number within the chosen repository). */
+  function openCreateDrawer() {
+    openDrawer_('create', view.repoCode ? D().getRepo(view.repoCode) : null, BLANK_QUERY());
+  }
+
+  function openDrawer_(mode, repo, q) {
+    /* Belt-and-braces behind the locked buttons (the real gate is the
+       server's isAdmin_ check on saveQuery/createQuery). */
+    if (!D().isAdmin()) { toast(NO_PERMISSION_MSG); return; }
+    closeEditDrawer();
+    const create = mode === 'create';
+
+    const statuses = STATUS_OPTIONS.includes(q.status || 'Production')
+      ? STATUS_OPTIONS : [q.status].concat(STATUS_OPTIONS);
+    const joined = (a) => (a || []).join('\n');
+
+    /* Category suggestions: the repo's categories when editing; every
+       repo's categories when creating (repo not chosen yet). */
+    const catNames = create
+      ? [...new Set(D().repoList().flatMap((r) => r.categories.map((c) => c.name)))]
+      : repo.categories.map((c) => c.name);
+
+    const field = (label, key, value, opts = {}) => `
+      <label class="drawer-field${opts.span ? ' span-2' : ''}">
+        <span class="drawer-label">${label}${opts.hint ? ` <em>${opts.hint}</em>` : ''}</span>
+        ${opts.rows
+          ? `<textarea data-edit-key="${key}" rows="${opts.rows}"${opts.mono ? ' class="mono"' : ''}>${esc(value)}</textarea>`
+          : `<input type="text" data-edit-key="${key}" value="${esc(value)}"${opts.list ? ` list="${opts.list}"` : ''}>`}
+      </label>`;
+
+    const wrap = document.createElement('div');
+    wrap.id = 'edit-drawer-root';
+    wrap.dataset.mode = mode;
+    wrap.innerHTML = `
+      <div class="drawer-overlay" data-action="drawer-close"></div>
+      <aside class="edit-drawer" role="dialog" aria-label="${create ? 'New query' : 'Edit query'}">
+        <div class="drawer-head">
+          <div>
+            <div class="drawer-title">${create ? ICONS.plus : ICONS.edit} ${create ? 'New Query' : 'Edit Query'}</div>
+            <div class="drawer-sub">${create
+              ? 'Query ID is generated on save — creation is audited to the Change Log'
+              : `${esc(q.id)} · ${esc(repo.code)} · v${esc(q.version)} — changes are audited to the Change Log`}</div>
+          </div>
+          <button class="btn sm" data-action="drawer-close" title="Close">✕</button>
+        </div>
+        <div class="drawer-body">
+          ${create ? `
+          <label class="drawer-field">
+            <span class="drawer-label">Repository <em>required — determines the Query ID prefix</em></span>
+            <select data-edit-key="repository">
+              ${D().repoList().map((r) => `<option value="${esc(r.code)}"${repo && repo.code === r.code ? ' selected' : ''}>${esc(r.code)} — ${esc(r.name)}</option>`).join('')}
+            </select>
+          </label>` : ''}
+          <div class="drawer-grid">
+            <label class="drawer-field">
+              <span class="drawer-label">Status${create ? ' <em>new queries default to Draft</em>' : ''}</span>
+              <select data-edit-key="status">
+                ${statuses.map((s) => `<option${s === (q.status || 'Production') ? ' selected' : ''}>${esc(s)}</option>`).join('')}
+              </select>
+            </label>
+            ${field('Category', 'category', q.category, { list: 'drawer-cat-list' })}
+            <datalist id="drawer-cat-list">
+              ${catNames.map((n) => `<option value="${esc(n)}">`).join('')}
+            </datalist>
+          </div>
+          ${field('Query Name', 'name', q.name)}
+          ${field('Description', 'description', q.desc, { hint: 'one-liner shown in the library list' })}
+          ${field('Remarks / Purpose', 'remarks', q.remarks, { rows: 3 })}
+          ${field('Link', 'link', q.link, { hint: 'optional URL' })}
+          <div class="drawer-grid">
+            ${field('Inputs', 'inputs', joined(q.inputs), { rows: 3, hint: 'one per line' })}
+            ${field('Returns', 'returns', joined(q.returns), { rows: 3, hint: 'one per line' })}
+            ${field('Data Sources', 'dataSources', joined(q.dataSources), { rows: 3, hint: 'one per line' })}
+            ${field('Tags', 'tags', joined(q.tags), { rows: 3, hint: 'one per line' })}
+          </div>
+          ${field('Use Cases', 'useCases', joined(q.useCases), { rows: 3, hint: 'one per line' })}
+          ${field('SQL', 'sql', q.sql, { rows: 12, mono: true })}
+        </div>
+        <div class="drawer-foot">
+          <button class="btn" data-action="drawer-close">Cancel</button>
+          <button class="btn primary" data-action="drawer-save"${create ? '' : ` data-id="${q.id}"`}>${create ? 'Create Query' : 'Save Changes'}</button>
+        </div>
+      </aside>`;
+    document.body.appendChild(wrap);
+    requestAnimationFrame(() => wrap.classList.add('open'));
+  }
+
+  function closeEditDrawer() {
+    const el = document.getElementById('edit-drawer-root');
+    if (el) el.remove();
+  }
+
+  async function saveDrawer(id) {
+    const root = document.getElementById('edit-drawer-root');
+    const saveBtn = root && root.querySelector('[data-action="drawer-save"]');
+    if (!saveBtn || saveBtn.disabled) return;
+
+    const edits = {};
+    root.querySelectorAll('[data-edit-key]').forEach((el) => { edits[el.dataset.editKey] = el.value; });
+
+    if (root.dataset.mode === 'create') return createFromDrawer_(saveBtn, edits);
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving…';
+    try {
+      const result = await D().saveQuery(id, edits);
+      if (!result || !result.saved) {
+        toast('No changes to save');
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save Changes';
+        return;
+      }
+      closeEditDrawer();
+      toast(`Saved v${result.version} — ${result.changedFields.length} field${result.changedFields.length === 1 ? '' : 's'} logged`);
+
+      const repo = view.repoCode ? D().getRepo(view.repoCode) : null;
+      if (!repo) return;
+      const stillListed = repo.queries.some((x) => x.id === id);
+      if (!stillListed) {
+        // Status moved off Production — the query is no longer served.
+        view.queryId = repo.queries[0] ? repo.queries[0].id : null;
+        try { history.replaceState(null, '', `#/repo/${repo.code}`); } catch (e) { /* sandboxed iframe */ }
+        renderRepo();
+      } else {
+        renderQueryList(repo);
+        renderDetail(repo);
+      }
+    } catch (err) {
+      console.error('[FPI] saveQuery failed:', err);
+      toast('Save failed — ' + (err && err.message ? err.message : 'see console'));
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save Changes';
+    }
+  }
+
+  async function createFromDrawer_(saveBtn, fields) {
+    if (!String(fields.name || '').trim()) { toast('Query Name is required'); return; }
+    if (!String(fields.repository || '').trim()) { toast('Repository is required'); return; }
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Creating…';
+    try {
+      const result = await D().createQuery(fields);
+      closeEditDrawer();
+      const production = (result.status || '').toLowerCase() === 'production';
+      toast(`Created ${result.queryId} (v${result.version}, ${result.status})${production ? '' : ' — hidden until Production'}`);
+
+      /* Refresh whatever is on screen. The adapter already inserted the
+         query into the in-memory catalog if it's Production. */
+      if (view.page === 'landing') {
+        renderLanding();
+      } else if (view.repoCode === result.query.repository && production) {
+        view.queryId = result.queryId;
+        const repo = D().getRepo(view.repoCode);
+        renderQueryList(repo);
+        renderDetail(repo);
+        try { history.replaceState(null, '', `#/repo/${repo.code}/${result.queryId}`); } catch (e) { /* sandboxed iframe */ }
+      }
+    } catch (err) {
+      console.error('[FPI] createQuery failed:', err);
+      toast('Create failed — ' + (err && err.message ? err.message : 'see console'));
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Create Query';
+    }
   }
 
   function selectQuery(repo, id, opts) {
@@ -591,6 +807,27 @@
         }
         break;
       }
+      case 'edit-query': {
+        if (el.dataset.locked) { toast(NO_PERMISSION_MSG); break; }
+        if (repo) {
+          const q = repo.queries.find((x) => x.id === el.dataset.id);
+          if (q) openEditDrawer(repo, q);
+        }
+        break;
+      }
+      case 'new-query': {
+        if (el.dataset.locked) { toast(NO_PERMISSION_MSG); break; }
+        openCreateDrawer();
+        break;
+      }
+      case 'drawer-close': {
+        closeEditDrawer();
+        break;
+      }
+      case 'drawer-save': {
+        saveDrawer(el.dataset.id);
+        break;
+      }
       case 'mobile-back': {
         view.mobileDetail = false;
         const rv = document.getElementById('repo-view');
@@ -599,6 +836,14 @@
       }
     }
   });
+
+  // Esc closes the edit drawer (checked before the search shortcuts)
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.getElementById('edit-drawer-root')) {
+      e.stopPropagation();
+      closeEditDrawer();
+    }
+  }, { capture: true });
 
   // "/" focuses the active search box
   document.addEventListener('keydown', (e) => {
