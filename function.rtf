@@ -1,0 +1,160 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2904
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 function setupFPIHubDataContractV1() \{\
+  const ss = SpreadsheetApp.getActiveSpreadsheet();\
+\
+  const tabs = \{\
+    "Queries": [\
+      "Query ID", "Repository", "Category", "Query Name", "Description",\
+      "Purpose", "Inputs", "Returns", "Data Sources", "Tags", "SQL",\
+      "Use Cases", "Link", "Updated By", "Last Updated", "Owner",\
+      "Reviewer", "Status", "Version", "Replacement Query ID", "Notes"\
+    ],\
+    "Categories": [\
+      "Repository", "Category", "Description", "Color", "Sort Order", "Active"\
+    ],\
+    "Repositories": [\
+      "Repository", "Display Name", "Description", "Icon", "Color", "Sort Order", "Enabled"\
+    ],\
+    "User Favorites": [\
+      "User Email", "Repository", "Query ID", "Favorited Date"\
+    ],\
+    "Change Log": [\
+      "Timestamp", "User Email", "Query ID", "Action", "Notes"\
+    ]\
+  \};\
+\
+  Object.entries(tabs).forEach(([name, headers]) => \{\
+    let sheet = ss.getSheetByName(name);\
+    if (!sheet) sheet = ss.insertSheet(name);\
+\
+    sheet.clear();\
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);\
+    sheet.setFrozenRows(1);\
+\
+    sheet.getRange(1, 1, 1, headers.length)\
+      .setFontWeight("bold")\
+      .setBackground("#111827")\
+      .setFontColor("#ffffff");\
+\
+    if (!sheet.getFilter()) \{\
+      sheet.getRange(1, 1, Math.max(sheet.getMaxRows(), 2), headers.length).createFilter();\
+    \}\
+\
+    sheet.autoResizeColumns(1, headers.length);\
+  \});\
+\
+  seedRepositoriesV1_(ss);\
+  seedCategoriesV1_(ss);\
+  applyValidationV1_(ss);\
+  applyFormattingV1_(ss);\
+\
+  SpreadsheetApp.getUi().alert("FPI Intelligence Hub Data Contract v1.0 setup complete.");\
+\}\
+\
+function seedRepositoriesV1_(ss) \{\
+  const sheet = ss.getSheetByName("Repositories");\
+  const rows = [\
+    ["ORG", "Organized Fraud Repository", "Queries supporting Organized Fraud investigations and ring development.", "\uc0\u55358 \u56800 ", "#60a5fa", 10, true],\
+    ["LE", "Law Enforcement Repository", "Queries supporting law enforcement engagements and legal process.", "\uc0\u9878 \u65039 ", "#a78bfa", 20, true],\
+    ["SUB", "Subpoena Repository", "Queries supporting subpoena intake, records, and fulfillment.", "\uc0\u55357 \u56513 ", "#34d399", 30, true]\
+  ];\
+  sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);\
+\}\
+\
+function seedCategoriesV1_(ss) \{\
+  const sheet = ss.getSheetByName("Categories");\
+  const rows = [\
+    ["ORG", "Identity", "Customer identity, profile, and relationship queries.", "#60a5fa", 10, true],\
+    ["ORG", "Digital Activity", "Login, device, IP, and online access queries.", "#34d399", 20, true],\
+    ["ORG", "Transactions", "Money movement, card, ATM, ACH, Zelle, wire, and deposit queries.", "#fbbf24", 30, true],\
+    ["ORG", "Profile Maintenance", "Address, phone, email, and account maintenance activity.", "#fb7185", 40, true],\
+    ["ORG", "Claims", "Claims, disputes, Reg E, and provisional credit support.", "#f97316", 50, true],\
+    ["ORG", "Ring Development", "Queries used to expand, connect, or validate organized fraud rings.", "#a78bfa", 60, true],\
+\
+    ["LE", "Legal Process", "Subpoenas, court orders, warrants, and legal process tracking.", "#a78bfa", 10, true],\
+    ["LE", "Subscriber Records", "Customer, account, and subscriber information for legal response.", "#60a5fa", 20, true],\
+    ["LE", "Financial Records", "Transaction, balance, statement, and funds flow records.", "#fbbf24", 30, true],\
+    ["LE", "Digital Evidence", "Login, IP, device, and online banking audit records.", "#22d3ee", 40, true],\
+    ["LE", "Case Support", "Support queries for law enforcement cases and follow-up.", "#fb7185", 50, true],\
+\
+    ["SUB", "Intake & Tracking", "Subpoena intake, assignment, and status tracking.", "#34d399", 10, true],\
+    ["SUB", "Account Records", "Account-level record production and profile support.", "#60a5fa", 20, true],\
+    ["SUB", "Transaction Records", "Transaction records and activity pulls.", "#fbbf24", 30, true],\
+    ["SUB", "Digital Records", "Digital access, device, IP, and login records.", "#22d3ee", 40, true],\
+    ["SUB", "Production & Delivery", "Production, fulfillment, delivery, and completion tracking.", "#a78bfa", 50, true]\
+  ];\
+  sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);\
+\}\
+\
+function applyValidationV1_(ss) \{\
+  const queries = ss.getSheetByName("Queries");\
+\
+  const repoRule = SpreadsheetApp.newDataValidation()\
+    .requireValueInRange(ss.getSheetByName("Repositories").getRange("A2:A"), true)\
+    .setAllowInvalid(false)\
+    .build();\
+\
+  const categoryRule = SpreadsheetApp.newDataValidation()\
+    .requireValueInRange(ss.getSheetByName("Categories").getRange("B2:B"), true)\
+    .setAllowInvalid(true)\
+    .build();\
+\
+  const statusRule = SpreadsheetApp.newDataValidation()\
+    .requireValueInList(["Draft", "Pending Review", "Needs Changes", "Production", "Retired"], true)\
+    .setAllowInvalid(false)\
+    .build();\
+\
+  queries.getRange("B2:B").setDataValidation(repoRule);\
+  queries.getRange("C2:C").setDataValidation(categoryRule);\
+  queries.getRange("R2:R").setDataValidation(statusRule);\
+\}\
+\
+function applyFormattingV1_(ss) \{\
+  const queries = ss.getSheetByName("Queries");\
+\
+  queries.setColumnWidth(1, 120);\
+  queries.setColumnWidth(2, 120);\
+  queries.setColumnWidth(3, 180);\
+  queries.setColumnWidth(4, 280);\
+  queries.setColumnWidth(5, 360);\
+  queries.setColumnWidth(6, 420);\
+  queries.setColumnWidth(7, 240);\
+  queries.setColumnWidth(8, 240);\
+  queries.setColumnWidth(9, 240);\
+  queries.setColumnWidth(10, 260);\
+  queries.setColumnWidth(11, 650);\
+  queries.setColumnWidth(12, 300);\
+  queries.setColumnWidth(13, 240);\
+  queries.setColumnWidth(21, 360);\
+\
+  queries.getRange("E:F").setWrap(true);\
+  queries.getRange("G:I").setWrap(true);\
+  queries.getRange("K:L").setWrap(true);\
+  queries.getRange("U:U").setWrap(true);\
+\
+  const statusRange = queries.getRange("R2:R");\
+\
+  const rules = [\
+    makeTextRuleV1_(statusRange, "Draft", "#e5e7eb"),\
+    makeTextRuleV1_(statusRange, "Pending Review", "#fef3c7"),\
+    makeTextRuleV1_(statusRange, "Needs Changes", "#fed7aa"),\
+    makeTextRuleV1_(statusRange, "Production", "#bbf7d0"),\
+    makeTextRuleV1_(statusRange, "Retired", "#fecaca")\
+  ];\
+\
+  queries.setConditionalFormatRules(rules);\
+\}\
+\
+function makeTextRuleV1_(range, text, color) \{\
+  return SpreadsheetApp.newConditionalFormatRule()\
+    .whenTextEqualTo(text)\
+    .setBackground(color)\
+    .setRanges([range])\
+    .build();\
+\}}
