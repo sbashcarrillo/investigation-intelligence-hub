@@ -1,0 +1,1 @@
+Disclaimer: This repository is an original demonstration project. It does not contain proprietary code, confidential workflows, production SQL, customer information, or internal systems from any employer. All data and examples are fictional or sanitized for demonstration purposes.
