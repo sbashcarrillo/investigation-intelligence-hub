@@ -1,0 +1,52 @@
+<!-- =========================================================================
+  FPI Intelligence Hub — HtmlService template (Google Apps Script)
+  ===========================================================================
+  Served by doGet() in Code.gs via HtmlService.createTemplateFromFile('index').
+
+  Apps Script cannot serve css/ or js/ files from relative paths, so each
+  asset lives in its own HTML file and is inlined here with include():
+
+    css-styles       → all styling (dark + light themes)
+    js-config        → DATA_MODE config (reads window.FPI_DATA_MODE below)
+    js-data-adapter  → the single data access layer (google.script.run lives
+                       ONLY in there, promisified via gasCall)
+    js-app           → the UI (never calls the server directly)
+
+  No external dependencies: no CDNs, no Google Fonts, no Highlight.js.
+  Fonts fall back to the system stack defined in css-styles; SQL syntax
+  highlighting is the lightweight native tokenizer in js-app.
+========================================================================== -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FPI Intelligence Hub</title>
+
+  <?!= include('css-styles'); ?>
+  <?!= include('hero-image'); ?>
+
+  <script>
+    /* Switch the app to live Google Sheets data.
+       js-config reads this — no config edits needed for deployment. */
+    window.FPI_DATA_MODE = 'gas';
+
+    /* Apply saved theme before first paint to avoid a flash of the wrong theme. */
+    try {
+      var t = JSON.parse(localStorage.getItem('fpi.theme'));
+      document.documentElement.dataset.theme = t === 'light' ? 'light' : 'dark';
+    } catch (e) {
+      document.documentElement.dataset.theme = 'dark';
+    }
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="toast" class="toast" hidden></div>
+
+  <?!= include('js-config'); ?>
+  <?!= include('js-data-adapter'); ?>
+  <?!= include('js-app'); ?>
+</body>
+</html>

@@ -1,0 +1,332 @@
+<script>
+/* =========================================================================
+   FPI Intelligence Hub — DATA ADAPTER (the single data access layer)
+   =========================================================================
+   Every piece of data the UI touches goes through this file:
+
+     FPI.data   → catalog (repos/queries), search, favorites, recents, usage
+     FPI.store  → raw localStorage helper (theme + local persistence)
+
+   The UI (js-app) NEVER calls google.script.run directly — every server
+   call goes through this file's gasCall() bridge.
+
+   DATA_MODE (set in js-config; index.html forces 'gas' in this deployment):
+     'gas'  → catalog + favorites from Google Apps Script (google.script.run
+              → Code.gs → your Google Sheet: one master "Queries" table,
+              repo cards from "Repositories", filter pills from
+              "Categories" — repo pages are Queries filtered by the
+              Repository column, server-side, Status = Production only).
+     'mock' → local sample catalog (dev-only; not bundled in this project).
+     Recents and most-used stay in localStorage in BOTH modes (per-user,
+     per-browser). If you later want them server-side, touchRecent() and
+     bumpUsage() below are the only two functions to change.
+
+   ┌─────────────────────────────────────────────────────────────────────┐
+   │ WIRING (nothing in this file needs to change):                      │
+   │   1. Code.gs    → paste your Sheet ID into CONFIG.SHEET_ID          │
+   │   2. index.html → already sets window.FPI_DATA_MODE='gas'           │
+   │   3. This adapter sees mode 'gas' and calls the Code.gs server      │
+   │      functions: getRepositorySummary(), getQueriesByRepo(),         │
+   │      getCurrentUser(), getUserFavorites(), toggleFavorite().        │
+   └─────────────────────────────────────────────────────────────────────┘
+   ========================================================================= */
+
+(function () {
+  'use strict';
+
+  window.FPI = window.FPI || {};
+
+  /* ====================== localStorage helper ====================== */
+
+  const store = {
+    read(key, fallback) {
+      try {
+        const v = localStorage.getItem(key);
+        return v === null ? fallback : JSON.parse(v);
+      } catch (e) { return fallback; }
+    },
+    write(key, value) {
+      try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* private mode */ }
+    },
+
+    get theme() { return this.read('fpi.theme', 'dark'); },
+    set theme(v) { this.write('fpi.theme', v); },
+
+    get favorites() { return this.read('fpi.favorites', []); },     // mock mode only
+    set favorites(v) { this.write('fpi.favorites', v); },
+
+    get recent() { return this.read('fpi.recent', []); },           // [{id, ts}]
+    set recent(v) { this.write('fpi.recent', v); },
+
+    get usage() { return this.read('fpi.usage', {}); },             // {id: count}
+    set usage(v) { this.write('fpi.usage', v); }
+  };
+
+  FPI.store = store;
+
+  /* ====================== GAS bridge ====================== */
+
+  const gasAvailable = () =>
+    typeof google !== 'undefined' && google.script && google.script.run;
+
+  /** Promisified google.script.run call to a Code.gs server function. */
+  function gasCall(fnName, ...args) {
+    return new Promise((resolve, reject) => {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(reject)[fnName](...args);
+    });
+  }
+
+  /* ====================== Normalization ====================== */
+
+  /* The Google Sheet has no Icon column — icons are assigned by category.
+     Add entries here when you add categories to the Categories tab. */
+  const CATEGORY_ICONS = {
+    'Customer Research': 'user',
+    'Digital Activity': 'monitor',
+    'Identity': 'id',
+    'Transactions': 'receipt',
+    'Claims': 'flag',
+    'Ring Development': 'network',
+    'Legal Process': 'scale',
+    'Subscriber Records': 'user',
+    'Financial Records': 'dollar',
+    'Digital Evidence': 'monitor',
+    'Engagement Tracking': 'flag',
+    'Case Support': 'folder',
+    'Intake & Tracking': 'folder',
+    'Account Records': 'bank',
+    'Transaction Records': 'receipt',
+    'Digital Records': 'monitor',
+    'Production & Delivery': 'package'
+  };
+
+  /**
+   * Map one server row (from Code.gs — keys already camelCase, list
+   * columns already split into arrays, non-Production rows already
+   * filtered out server-side) onto the client query model.
+   *
+   * COLUMN → MODEL MAPPING (adjust here if your sheet semantics differ):
+   *   Query ID → id, Query Name → name, Description → desc (library line)
+   *   Remarks  → purpose (long explanation; falls back to Description)
+   *   Inputs / Returns / Use Cases / Data Sources / Tags → arrays
+   *   Link / SQL / Last Updated / Updated By → as-is
+   */
+  function normalizeQuery(row) {
+    return {
+      id: row.queryId,
+      name: row.name,
+      desc: row.description || '',
+      category: row.category || 'Uncategorized',
+      icon: CATEGORY_ICONS[row.category] || 'file',
+      purpose: row.remarks || row.description || '',
+      inputs: row.inputs || [],
+      returns: row.returns || [],
+      useCases: row.useCases || [],
+      dataSources: row.dataSources || [],   // optional — UI shows only if present
+      tags: row.tags || [],                 // optional — UI shows only if present
+      link: row.link || '',                 // optional — UI shows only if present
+      sql: row.sql || '',
+      lastUpdated: row.lastUpdated || '',
+      updatedBy: row.updatedBy || '',
+      status: row.status || ''            // always 'Production' today; kept for future admin views
+    };
+  }
+
+  /* ====================== The adapter ====================== */
+
+  let repos = {};        // normalized in-memory catalog: {CODE: repo}
+  let favIds = [];       // session cache of favorited query IDs
+
+  const data = {
+    mode: 'mock',        // effective mode after init (may differ from config on fallback)
+    ready: false,
+    notice: '',          // set when we fell back to mock — UI toasts it
+    user: { email: '' }, // Google email in gas mode; '' locally
+
+    /* ---------- boot ---------- */
+
+    async init() {
+      const wantGas = (FPI.CONFIG && FPI.CONFIG.DATA_MODE) === 'gas';
+
+      if (wantGas && gasAvailable()) {
+        try {
+          await initFromGas();
+          this.mode = 'gas';
+        } catch (err) {
+          console.error('[FPI] GAS backend failed, falling back to mock data:', err);
+          initFromMock();
+          this.notice = 'Live data unavailable — showing local sample data';
+        }
+      } else {
+        if (wantGas) {
+          console.warn('[FPI] DATA_MODE is "gas" but google.script.run is not available (local preview?). Using mock data.');
+          this.notice = 'GAS mode requested but unavailable — showing local sample data';
+        }
+        initFromMock();
+      }
+
+      this.ready = true;
+      return this;
+    },
+
+    /* ---------- catalog access (mirrors the Code.gs server API) ---------- */
+
+    repoList() { return Object.values(repos); },
+
+    getRepo(code) { return repos[code] || null; },
+
+    getRepositorySummary() {
+      return this.repoList().map((r) => ({
+        code: r.code, name: r.name, description: r.description,
+        accent: r.accent, queryCount: r.queries.length, categories: r.categories
+      }));
+    },
+
+    getQueriesByRepo(code) {
+      const r = repos[code];
+      return r ? r.queries : [];
+    },
+
+    getQueryDetail(code, queryId) {
+      const r = repos[code];
+      return r ? r.queries.find((q) => q.id === queryId) || null : null;
+    },
+
+    /** Find a query by id across all repos → {repo, query} | null. */
+    findQuery(id) {
+      for (const repo of this.repoList()) {
+        const q = repo.queries.find((x) => x.id === id);
+        if (q) return { repo, query: q };
+      }
+      return null;
+    },
+
+    /**
+     * Ranked search over the loaded catalog (optionally one repo).
+     * Runs client-side in both modes — the full catalog is in memory, so
+     * this stays instant. Code.gs also exposes a server-side
+     * searchQueries(term) with the same ranking if the catalog ever grows
+     * too large to ship to the client.
+     */
+    searchQueries(term, repo) {
+      const t = String(term || '').trim().toLowerCase();
+      if (!t) return [];
+      const pool = repo ? [repo] : this.repoList();
+      const results = [];
+      for (const r of pool) {
+        for (const q of r.queries) {
+          const name = q.name.toLowerCase();
+          const hay = `${q.name} ${q.desc} ${q.category} ${q.purpose} ${q.id} ${q.useCases.join(' ')} ${(q.tags || []).join(' ')}`.toLowerCase();
+          let score = -1;
+          if (name.startsWith(t)) score = 0;
+          else if (name.includes(t)) score = 1;
+          else if (q.desc.toLowerCase().includes(t)) score = 2;
+          else if (hay.includes(t)) score = 3;
+          if (score >= 0) results.push({ repo: r, query: q, score });
+        }
+      }
+      results.sort((a, b) => a.score - b.score || a.query.name.localeCompare(b.query.name));
+      return results;
+    },
+
+    /* ---------- favorites ---------- */
+
+    favoriteIds() { return favIds.slice(); },
+
+    isFavorite(id) { return favIds.includes(id); },
+
+    /**
+     * Toggle a favorite. Returns the NEW state immediately (optimistic).
+     * mock → persisted to localStorage.
+     * gas  → persisted to the "User Favorites" sheet via Code.gs
+     *        toggleFavorite(repoName, queryId); reverted on server failure.
+     */
+    toggleFavorite(id) {
+      const nowFav = !favIds.includes(id);
+      favIds = nowFav ? favIds.concat(id) : favIds.filter((x) => x !== id);
+
+      if (this.mode === 'gas') {
+        const found = this.findQuery(id);
+        gasCall('toggleFavorite', found ? found.repo.code : '', id).catch((err) => {
+          console.error('[FPI] toggleFavorite failed on server, reverting:', err);
+          favIds = nowFav ? favIds.filter((x) => x !== id) : favIds.concat(id);
+        });
+      } else {
+        store.favorites = favIds;
+      }
+      return nowFav;
+    },
+
+    /* ---------- recents & usage (localStorage in both modes) ---------- */
+
+    recentIds() { return store.recent.map((r) => r.id); },
+
+    touchRecent(id) {
+      const recent = store.recent.filter((r) => r.id !== id);
+      recent.unshift({ id, ts: Date.now() });
+      store.recent = recent.slice(0, 20);
+    },
+
+    usageCounts() { return store.usage; },
+
+    bumpUsage(id, n) {
+      const usage = store.usage;
+      usage[id] = (usage[id] || 0) + (n || 1);
+      store.usage = usage;
+    }
+  };
+
+  /* ---------- init paths ---------- */
+
+  function initFromMock() {
+    if (!FPI.MOCK || !Object.keys(FPI.MOCK.repos || {}).length) {
+      throw new Error('No mock data loaded (js/data-*.js missing) and no GAS backend available.');
+    }
+    repos = FPI.MOCK.repos;            // mock entries are already in model shape
+    favIds = store.favorites.slice();
+    data.user = { email: '' };
+  }
+
+  async function initFromGas() {
+    /* One boot sequence, all through the Code.gs server functions: */
+    const [summary, user, serverFavs] = await Promise.all([
+      gasCall('getRepositorySummary'),
+      gasCall('getCurrentUser'),
+      gasCall('getUserFavorites')
+    ]);
+
+    const queriesPerRepo = await Promise.all(
+      summary.map((r) => gasCall('getQueriesByRepo', r.code))
+    );
+
+    /* Normalize defensively: the landing page renders straight from these
+       records (cards from the Repositories tab, counts from the filtered
+       Queries rows), so every field the UI touches must be present and
+       well-typed even if a sheet row is partially filled. */
+    repos = {};
+    summary.forEach((r, i) => {
+      if (!r || !r.code) return;
+      const accent = typeof r.accent === 'string' && r.accent.trim().startsWith('#')
+        ? r.accent.trim() : '#60a5fa';
+      repos[r.code] = {
+        code: r.code,
+        name: r.name || r.code,
+        fullName: r.fullName || r.name || r.code,
+        description: r.description || '',
+        accent,
+        categories: Array.isArray(r.categories) ? r.categories : [],
+        // Card counts = length of this list: the master Queries table
+        // filtered server-side to this repo + Status = Production.
+        queries: (queriesPerRepo[i] || []).map(normalizeQuery)
+      };
+    });
+
+    data.user = user || { email: '' };
+    favIds = (serverFavs || []).map((f) => f.queryId);
+  }
+
+  FPI.data = data;
+})();
+</script>

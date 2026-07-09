@@ -1,0 +1,666 @@
+<script>
+/* =========================================================================
+   FPI Intelligence Hub — Application (UI layer only)
+   -------------------------------------------------------------------------
+   Vanilla JS single-page app. Hash routing:
+     #/                    → landing
+     #/repo/ORG            → repository (first query selected)
+     #/repo/ORG/ORG_0001   → repository with a specific query selected
+
+   DATA ACCESS RULE: this file never calls google.script.run directly.
+   Everything goes through the adapter (js-data-adapter):
+     FPI.data   → catalog, search, favorites, recents, usage
+     FPI.store  → theme preference
+   ========================================================================= */
+
+(function () {
+  'use strict';
+
+  /* ============================== Icons ============================== */
+
+  const I = (body) =>
+    `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+
+  const ICONS = {
+    monitor: I('<rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>'),
+    link: I('<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>'),
+    globe: I('<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>'),
+    shield: I('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'),
+    clock: I('<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'),
+    smartphone: I('<rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>'),
+    key: I('<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3-3.5 3.5z"/>'),
+    lock: I('<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'),
+    user: I('<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'),
+    users: I('<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'),
+    map: I('<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>'),
+    phone: I('<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>'),
+    mail: I('<rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="22,6 12,13 2,6"/>'),
+    bank: I('<line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/>'),
+    alert: I('<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>'),
+    id: I('<rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/>'),
+    card: I('<rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/>'),
+    calendar: I('<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'),
+    file: I('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>'),
+    check: I('<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>'),
+    search: I('<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>'),
+    receipt: I('<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1z"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/>'),
+    send: I('<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>'),
+    transfer: I('<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>'),
+    dollar: I('<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>'),
+    flag: I('<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>'),
+    scale: I('<line x1="12" y1="3" x2="12" y2="21"/><path d="M8 21h8"/><path d="M3 7h18"/><path d="M6 7l-3 6a3 3 0 0 0 6 0L6 7z"/><path d="M18 7l-3 6a3 3 0 0 0 6 0l-3-6z"/>'),
+    chart: I('<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>'),
+    network: I('<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>'),
+    folder: I('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'),
+    package: I('<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>'),
+    /* UI */
+    star: I('<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26"/>'),
+    sun: I('<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>'),
+    moon: I('<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>'),
+    arrowLeft: I('<line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>'),
+    copy: I('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
+    external: I('<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>'),
+    checkCircle: I('<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>')
+  };
+
+  const icon = (key) => ICONS[key] || ICONS.file;
+
+  /* ============================== Helpers ============================== */
+
+  const app = document.getElementById('app');
+  const D = () => FPI.data;   // the one data access point
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function hexToRgba(hex, a) {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+  }
+
+  function catColor(repo, catName) {
+    const c = repo.categories.find((x) => x.name === catName);
+    return c ? c.color : '#94a3b8';
+  }
+
+  /* ============================== Theme ============================== */
+
+  function applyTheme() {
+    document.documentElement.dataset.theme = FPI.store.theme;
+  }
+
+  function themeToggleHTML() {
+    const dark = FPI.store.theme === 'dark';
+    return `<button class="theme-toggle" data-action="toggle-theme" title="Switch theme">
+      ${dark ? ICONS.sun : ICONS.moon}<span>${dark ? 'Light' : 'Dark'}</span>
+    </button>`;
+  }
+
+  /* ============================== Clipboard / Toast ============================== */
+
+  let toastTimer = null;
+  function toast(msg) {
+    const el = document.getElementById('toast');
+    el.innerHTML = `${ICONS.checkCircle}<span>${esc(msg)}</span>`;
+    el.hidden = false;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 1800);
+  }
+
+  function copyText(text, msg) {
+    const done = () => toast(msg);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+    } else {
+      fallbackCopy(text, done);
+    }
+  }
+
+  function fallbackCopy(text, done) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) { /* ignore */ }
+    document.body.removeChild(ta);
+    done();
+  }
+
+  /* ============================== SQL Highlighting ============================== */
+
+  const SQL_KEYWORDS = new Set(('SELECT,FROM,WHERE,AND,OR,NOT,NULL,IS,IN,BETWEEN,LIKE,ILIKE,ORDER,GROUP,BY,HAVING,JOIN,LEFT,RIGHT,INNER,OUTER,ON,AS,DESC,ASC,LIMIT,UNION,ALL,DISTINCT,CASE,WHEN,THEN,ELSE,END,WITH,OVER,PARTITION,COUNT,SUM,AVG,MIN,MAX,DATEDIFF,DATEADD,DATE_TRUNC,CURRENT_DATE,COALESCE,UPPER,LOWER,EDITDISTANCE,SOUNDEX,EXISTS,VALUES,INSERT,UPDATE,DELETE,CAST,TRY_CAST').split(','));
+
+  function highlightSQL(sql) {
+    const tokenRe = /(--[^\n]*)|('(?:[^']|'')*')|(:[a-zA-Z_][a-zA-Z0-9_]*)|(\b\d+(?:\.\d+)?\b)|(\b[a-zA-Z_][a-zA-Z0-9_]*\b)/g;
+    return sql.split('\n').map((line, i) => {
+      let out = '';
+      let last = 0;
+      let m;
+      tokenRe.lastIndex = 0;
+      while ((m = tokenRe.exec(line)) !== null) {
+        out += esc(line.slice(last, m.index));
+        if (m[1]) out += `<span class="tok-c">${esc(m[1])}</span>`;
+        else if (m[2]) out += `<span class="tok-s">${esc(m[2])}</span>`;
+        else if (m[3]) out += `<span class="tok-p">${esc(m[3])}</span>`;
+        else if (m[4]) out += `<span class="tok-n">${esc(m[4])}</span>`;
+        else if (m[5]) {
+          const w = m[5].toUpperCase();
+          out += SQL_KEYWORDS.has(w) ? `<span class="tok-k">${esc(m[5])}</span>` : esc(m[5]);
+        }
+        last = m.index + m[0].length;
+      }
+      out += esc(line.slice(last));
+      return `<div class="sql-line"><span class="ln">${i + 1}</span><span class="lc">${out || ' '}</span></div>`;
+    }).join('');
+  }
+
+  /* ============================== View State ============================== */
+
+  const view = {
+    page: 'landing',     // 'landing' | 'repo'
+    repoCode: null,
+    queryId: null,
+    search: '',
+    cat: 'All',
+    favOnly: false,
+    mobileDetail: false
+  };
+
+  function visibleQueries(repo) {
+    let list = repo.queries;
+    if (view.cat !== 'All') list = list.filter((q) => q.category === view.cat);
+    if (view.favOnly) list = list.filter((q) => D().isFavorite(q.id));
+    if (view.search.trim()) {
+      const ids = new Set(D().searchQueries(view.search, repo).map((r) => r.query.id));
+      list = list.filter((q) => ids.has(q.id));
+    }
+    return list;
+  }
+
+  /* ============================== Landing ============================== */
+
+  function renderLanding() {
+    document.title = 'FPI Intelligence Hub';
+    const repos = D().repoList();
+    const totalQueries = repos.reduce((n, r) => n + r.queries.length, 0);
+
+    app.innerHTML = `
+      <div class="topbar">
+        <span class="brand"><span class="brand-mark">FPI</span> Intelligence Hub</span>
+        <span class="topbar-spacer"></span>
+        ${themeToggleHTML()}
+      </div>
+      <div class="landing">
+        <section class="hero">
+          <div class="hero-eyebrow">Fraud Prevention &amp; Investigations</div>
+          <h1>FPI Intelligence Hub</h1>
+          <div class="tagline">Search<span class="dot">.</span> Discover<span class="dot">.</span> Investigate<span class="dot">.</span></div>
+          <p class="sub">Access trusted investigative queries across Fraud Prevention &amp; Investigations. ${totalQueries} queries, one source of truth.</p>
+          <div class="global-search">
+            <div class="search-input-wrap">
+              ${ICONS.search}
+              <input type="text" id="global-search-input" placeholder="Search all repositories..." autocomplete="off" spellcheck="false">
+              <span class="search-kbd">/</span>
+            </div>
+            <div class="search-results" id="global-search-results" hidden></div>
+          </div>
+        </section>
+
+        <div class="section-label">Repositories</div>
+        <div class="repo-grid">
+          ${repos.map((r) => `
+            <button class="repo-card" data-action="open-repo" data-repo="${r.code}" style="--repo-accent-soft:${hexToRgba(r.accent, 0.12)}">
+              <span class="repo-card-head">
+                <span class="repo-badge" style="background:linear-gradient(135deg, ${r.accent}, ${hexToRgba(r.accent, 0.65)})">${r.code}</span>
+                <span class="repo-name">${esc(r.name)}</span>
+              </span>
+              <span class="repo-desc">${esc(r.description)}</span>
+              <span class="repo-card-foot">
+                <span class="count">${r.queries.length} Queries</span>
+                <span class="open">Open <span aria-hidden="true">→</span></span>
+              </span>
+            </button>`).join('')}
+        </div>
+
+        <div class="section-label">Quick Access</div>
+        <div class="quick-grid">
+          ${quickCardHTML('favorites', 'Favorites', 'Your saved queries')}
+          ${quickCardHTML('recent', 'Recently Viewed', 'Continue where you left off')}
+          ${quickCardHTML('most-used', 'Most Used', 'Your go-to queries')}
+        </div>
+      </div>`;
+
+    bindLanding();
+  }
+
+  function quickCardHTML(kind, title, sub) {
+    let entries = [];
+    if (kind === 'favorites') {
+      entries = D().favoriteIds().reverse().slice(0, 5);
+    } else if (kind === 'recent') {
+      entries = D().recentIds().slice(0, 5);
+    } else {
+      entries = Object.entries(D().usageCounts()).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([id]) => id);
+    }
+    const items = entries.map((id) => D().findQuery(id)).filter(Boolean);
+    const headIcon = kind === 'favorites'
+      ? `<span class="qc-star">${ICONS.star}</span>`
+      : (kind === 'recent' ? ICONS.clock : ICONS.chart);
+    const empty = {
+      'favorites': 'Star queries to pin them here.',
+      'recent': 'Queries you open will show up here.',
+      'most-used': 'Your most-run queries will surface here.'
+    }[kind];
+
+    return `
+      <div class="quick-card">
+        <div class="quick-card-head">${headIcon}<span>${title}</span></div>
+        <div class="quick-card-sub">${sub}</div>
+        <div class="quick-list">
+          ${items.length ? items.map(({ repo, query }) => `
+            <button class="quick-item" data-action="open-query" data-repo="${repo.code}" data-id="${query.id}">
+              <span class="q-icon" style="width:26px;height:26px;border-radius:7px;background:${hexToRgba(catColor(repo, query.category), 0.14)};color:${catColor(repo, query.category)}">${icon(query.icon)}</span>
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(query.name)}</span>
+              <span class="qi-badge">${repo.code}</span>
+            </button>`).join('')
+          : `<div class="quick-empty">${empty}</div>`}
+        </div>
+      </div>`;
+  }
+
+  let searchDismissBound = false;
+
+  function bindLanding() {
+    const input = document.getElementById('global-search-input');
+    const results = document.getElementById('global-search-results');
+
+    function renderResults() {
+      const term = input.value;
+      if (!term.trim()) { results.hidden = true; results.innerHTML = ''; return; }
+      const hits = D().searchQueries(term).slice(0, 10);
+      if (!hits.length) {
+        results.innerHTML = `<div class="search-empty">No queries match “${esc(term)}”.</div>`;
+        results.hidden = false;
+        return;
+      }
+      const byRepo = new Map();
+      hits.forEach((h) => {
+        if (!byRepo.has(h.repo.code)) byRepo.set(h.repo.code, []);
+        byRepo.get(h.repo.code).push(h);
+      });
+      results.innerHTML = Array.from(byRepo.entries()).map(([code, group]) => `
+        <div class="group-label">${esc(D().getRepo(code).name)}</div>
+        ${group.map((h) => `
+          <button class="search-result" data-action="open-query" data-repo="${code}" data-id="${h.query.id}">
+            <span class="q-icon" style="width:30px;height:30px;border-radius:8px;background:${hexToRgba(catColor(h.repo, h.query.category), 0.14)};color:${catColor(h.repo, h.query.category)}">${icon(h.query.icon)}</span>
+            <span><span class="sr-name">${esc(h.query.name)}</span><br><span class="sr-desc">${esc(h.query.desc)}</span></span>
+            <span class="sr-badge">${code}</span>
+          </button>`).join('')}`).join('');
+      results.hidden = false;
+    }
+
+    input.addEventListener('input', renderResults);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const first = results.querySelector('.search-result');
+        if (first) first.click();
+      } else if (e.key === 'Escape') {
+        input.value = '';
+        results.hidden = true;
+      }
+    });
+    if (!searchDismissBound) {
+      searchDismissBound = true;
+      document.addEventListener('click', (e) => {
+        const r = document.getElementById('global-search-results');
+        if (r && !e.target.closest('.global-search')) r.hidden = true;
+      }, { capture: true });
+    }
+  }
+
+  /* ============================== Repo View ============================== */
+
+  function renderRepo() {
+    const repo = D().getRepo(view.repoCode);
+    if (!repo) { location.hash = '#/'; return; }
+    document.title = `${repo.name} — FPI Intelligence Hub`;
+
+    app.innerHTML = `
+      <div class="repo-view${view.mobileDetail ? ' mobile-detail' : ''}" id="repo-view">
+        <div class="topbar">
+          <!-- data-action (not bare href) — with <base target="_top">, an
+               anchor navigates the TOP window to the HtmlService sandbox URL
+               and kills the app. JS hash routing stays inside the iframe. -->
+          <a class="back-link" href="#/" data-action="go-home">${ICONS.arrowLeft} All Repositories</a>
+          <span class="topbar-spacer"></span>
+          <span class="brand"><span class="brand-mark">FPI</span></span>
+          ${themeToggleHTML()}
+        </div>
+        <div class="repo-header">
+          <div class="repo-title-row">
+            <h1>${esc(repo.name)}</h1>
+            <span class="repo-count" id="repo-count"></span>
+          </div>
+          <div class="repo-controls">
+            <div class="cat-pills" id="cat-pills"></div>
+            <div class="repo-search">
+              ${ICONS.search}
+              <input type="text" id="repo-search-input" placeholder="Search ${esc(repo.code)} queries..." autocomplete="off" spellcheck="false" value="${esc(view.search)}">
+            </div>
+          </div>
+        </div>
+        <div class="repo-body">
+          <div class="query-list-panel">
+            <div class="query-list-head" id="query-list-head"></div>
+            <div class="query-list" id="query-list"></div>
+          </div>
+          <div class="detail-panel" id="detail-panel"></div>
+        </div>
+      </div>`;
+
+    renderPills(repo);
+    renderQueryList(repo);
+    renderDetail(repo);
+
+    const input = document.getElementById('repo-search-input');
+    input.addEventListener('input', () => {
+      view.search = input.value;
+      renderQueryList(repo);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { input.value = ''; view.search = ''; renderQueryList(repo); }
+      if (e.key === 'Enter') {
+        const first = visibleQueries(repo)[0];
+        if (first) selectQuery(repo, first.id);
+      }
+    });
+  }
+
+  function renderPills(repo) {
+    const el = document.getElementById('cat-pills');
+    const cats = ['All', ...repo.categories.map((c) => c.name)];
+    el.innerHTML = cats.map((c) =>
+      `<button class="cat-pill${view.cat === c && !view.favOnly ? ' active' : ''}" data-action="set-cat" data-cat="${esc(c)}">${esc(c)}</button>`
+    ).join('') +
+    `<button class="cat-pill fav-pill${view.favOnly ? ' active' : ''}" data-action="toggle-fav-filter" title="Show favorites only">★ Favorites</button>`;
+  }
+
+  function renderQueryList(repo) {
+    const listEl = document.getElementById('query-list');
+    const list = visibleQueries(repo);
+
+    document.getElementById('repo-count').textContent = `${repo.queries.length} Queries`;
+    document.getElementById('query-list-head').textContent =
+      list.length === repo.queries.length ? `${repo.queries.length} Queries`
+      : `${list.length} of ${repo.queries.length} Queries`;
+
+    if (!list.length) {
+      listEl.innerHTML = `<div class="list-empty">No queries match. Try a different search or category.</div>`;
+      return;
+    }
+
+    listEl.innerHTML = list.map((q) => {
+      const color = catColor(repo, q.category);
+      return `
+      <button class="query-row${q.id === view.queryId ? ' selected' : ''}" data-action="select-query" data-id="${q.id}">
+        <span class="q-icon" style="background:${hexToRgba(color, 0.14)};color:${color}">${icon(q.icon)}</span>
+        <span class="q-text">
+          <span class="q-name">${esc(q.name)}</span><br>
+          <span class="q-desc">${esc(q.desc)}</span>
+        </span>
+        <span class="star-btn${D().isFavorite(q.id) ? ' faved' : ''}" data-action="toggle-fav" data-id="${q.id}" role="button" title="Favorite">${ICONS.star}</span>
+      </button>`;
+    }).join('');
+  }
+
+  function renderDetail(repo) {
+    const panel = document.getElementById('detail-panel');
+    const q = repo.queries.find((x) => x.id === view.queryId);
+
+    if (!q) {
+      panel.innerHTML = `
+        <div class="detail-empty">
+          ${ICONS.search}
+          <div>Select a query from the library to see its details.</div>
+        </div>`;
+      return;
+    }
+
+    /* Optional fields (link / tags / dataSources) only exist on
+       sheet-driven queries — they render nothing in mock mode. */
+    const color = catColor(repo, q.category);
+    panel.innerHTML = `
+      <button class="mobile-back" data-action="mobile-back">${ICONS.arrowLeft} Back to ${esc(repo.code)} queries</button>
+      <div class="detail-head">
+        <div class="detail-title">
+          <span>${esc(q.name)}</span>
+          <button class="star-btn${D().isFavorite(q.id) ? ' faved' : ''}" data-action="toggle-fav" data-id="${q.id}" title="Favorite">${ICONS.star}</button>
+        </div>
+        <div class="detail-actions">
+          ${q.link ? `<a class="btn" href="${esc(q.link)}" target="_blank" rel="noopener">${ICONS.external} Open Link</a>` : ''}
+          <button class="btn primary" data-action="copy-query" data-id="${q.id}">${ICONS.copy} Copy Query</button>
+        </div>
+      </div>
+
+      <div class="meta-row">
+        <div class="meta-item">
+          <div class="meta-label">Repository</div>
+          <div class="meta-value">${esc(repo.code)}</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Category</div>
+          <div class="meta-value"><span class="cat-dot" style="background:${color}"></span>${esc(q.category)}</div>
+        </div>
+      </div>
+
+      <div class="detail-section">
+        <div class="sec-label">Purpose</div>
+        <p>${esc(q.purpose)}</p>
+        ${q.tags && q.tags.length ? `<div class="tag-chips">${q.tags.map((t) => `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>` : ''}
+      </div>
+
+      <div class="facts-grid">
+        <div>
+          <div class="sec-label">Inputs</div>
+          <ul>${q.inputs.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
+        </div>
+        <div>
+          <div class="sec-label">Returns</div>
+          <ul>${q.returns.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
+        </div>
+        <div>
+          <div class="sec-label">Typical Use Cases</div>
+          <ul>${q.useCases.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
+        </div>
+        ${q.dataSources && q.dataSources.length ? `
+        <div>
+          <div class="sec-label">Data Sources</div>
+          <ul>${q.dataSources.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
+        </div>` : ''}
+      </div>
+
+      <div class="sql-block">
+        <div class="sql-head">
+          <span class="sql-label">SQL Preview</span>
+          <button class="btn sm" data-action="copy-sql" data-id="${q.id}">${ICONS.copy} Copy SQL</button>
+        </div>
+        <div class="sql-body">${highlightSQL(q.sql)}</div>
+      </div>
+
+      <div class="detail-foot">
+        <span>Last Updated: <b>${esc(q.lastUpdated)}</b></span>
+        <span>Updated By: <b>${esc(q.updatedBy)}</b></span>
+        <span>Query ID: <b>${esc(q.id)}</b></span>
+      </div>`;
+  }
+
+  function selectQuery(repo, id, opts) {
+    view.queryId = id;
+    D().touchRecent(id);
+    D().bumpUsage(id);
+    /* replaceState can throw in sandboxed iframes (Apps Script HtmlService) */
+    try { history.replaceState(null, '', `#/repo/${repo.code}/${id}`); } catch (e) { /* ignore */ }
+
+    // Targeted update: re-mark selection, re-render detail
+    document.querySelectorAll('.query-row').forEach((row) => {
+      row.classList.toggle('selected', row.dataset.id === id);
+    });
+    renderDetail(repo);
+
+    if (window.innerWidth <= 880 && !(opts && opts.noMobile)) {
+      view.mobileDetail = true;
+      document.getElementById('repo-view').classList.add('mobile-detail');
+      window.scrollTo({ top: 0 });
+    }
+  }
+
+  /* ============================== Actions (event delegation) ============================== */
+
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-action]');
+    if (!el) return;
+    const action = el.dataset.action;
+    const repo = view.repoCode ? D().getRepo(view.repoCode) : null;
+
+    switch (action) {
+      case 'toggle-theme': {
+        FPI.store.theme = FPI.store.theme === 'dark' ? 'light' : 'dark';
+        applyTheme();
+        route(); // re-render to refresh toggle label
+        break;
+      }
+      case 'go-home': {
+        e.preventDefault();          // stop the anchor's top-frame navigation
+        location.hash = '#/';
+        break;
+      }
+      case 'open-repo': {
+        location.hash = `#/repo/${el.dataset.repo}`;
+        break;
+      }
+      case 'open-query': {
+        location.hash = `#/repo/${el.dataset.repo}/${el.dataset.id}`;
+        break;
+      }
+      case 'select-query': {
+        if (e.target.closest('[data-action="toggle-fav"]')) return; // star click inside row
+        if (repo) selectQuery(repo, el.dataset.id);
+        break;
+      }
+      case 'toggle-fav': {
+        e.stopPropagation();
+        const id = el.dataset.id;
+        const nowFav = D().toggleFavorite(id);
+        document.querySelectorAll(`[data-action="toggle-fav"][data-id="${id}"]`).forEach((btn) => {
+          btn.classList.toggle('faved', nowFav);
+        });
+        if (repo && view.favOnly) renderQueryList(repo);
+        toast(nowFav ? 'Added to favorites' : 'Removed from favorites');
+        break;
+      }
+      case 'set-cat': {
+        view.cat = el.dataset.cat;
+        view.favOnly = false;
+        if (repo) { renderPills(repo); renderQueryList(repo); }
+        break;
+      }
+      case 'toggle-fav-filter': {
+        view.favOnly = !view.favOnly;
+        if (repo) { renderPills(repo); renderQueryList(repo); }
+        break;
+      }
+      case 'copy-sql': {
+        const found = D().findQuery(el.dataset.id);
+        if (found) {
+          D().bumpUsage(found.query.id);
+          copyText(found.query.sql, 'SQL copied to clipboard');
+        }
+        break;
+      }
+      case 'copy-query': {
+        const found = D().findQuery(el.dataset.id);
+        if (found) {
+          D().bumpUsage(found.query.id);
+          const q = found.query;
+          const header = `-- ${q.name} (${q.id}) · FPI Intelligence Hub · ${found.repo.code}\n-- Purpose: ${q.purpose}\n\n`;
+          copyText(header + q.sql, 'Query copied to clipboard');
+        }
+        break;
+      }
+      case 'mobile-back': {
+        view.mobileDetail = false;
+        const rv = document.getElementById('repo-view');
+        if (rv) rv.classList.remove('mobile-detail');
+        break;
+      }
+    }
+  });
+
+  // "/" focuses the active search box
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && !/input|textarea/i.test(document.activeElement.tagName)) {
+      const input = document.getElementById('repo-search-input') || document.getElementById('global-search-input');
+      if (input) { e.preventDefault(); input.focus(); }
+    }
+  });
+
+  /* ============================== Router ============================== */
+
+  function route() {
+    if (!D().ready) return; // boot still in flight
+
+    const hash = location.hash || '#/';
+    const m = hash.match(/^#\/repo\/([A-Z]+)(?:\/([A-Za-z]+_\d+))?/);
+
+    if (m && D().getRepo(m[1])) {
+      const changedRepo = view.repoCode !== m[1];
+      view.page = 'repo';
+      view.repoCode = m[1];
+      if (changedRepo) { view.search = ''; view.cat = 'All'; view.favOnly = false; view.mobileDetail = false; }
+
+      const repo = D().getRepo(view.repoCode);
+      const requested = m[2] && repo.queries.some((q) => q.id === m[2]) ? m[2] : null;
+      view.queryId = requested || (changedRepo || !view.queryId ? (repo.queries[0] && repo.queries[0].id) : view.queryId);
+
+      // Deep link counts as a view
+      if (view.queryId) D().touchRecent(view.queryId);
+      if (requested) D().bumpUsage(requested);
+      if (requested && window.innerWidth <= 880) view.mobileDetail = true;
+
+      renderRepo();
+    } else {
+      view.page = 'landing';
+      view.repoCode = null;
+      view.queryId = null;
+      view.mobileDetail = false;
+      renderLanding();
+    }
+  }
+
+  window.addEventListener('hashchange', route);
+
+  /* ============================== Boot ============================== */
+
+  applyTheme();
+  app.innerHTML = `<div class="boot">Loading queries…</div>`;
+
+  FPI.data.init()
+    .then(() => {
+      route();
+      if (FPI.data.notice) toast(FPI.data.notice);
+    })
+    .catch((err) => {
+      console.error('[FPI] Failed to initialize data layer:', err);
+      app.innerHTML = `
+        <div class="boot error">
+          <div><b>Could not load query data.</b></div>
+          <div>Check the browser console — and if this is a Google Apps Script
+          deployment, verify the Sheet ID and tab names in Code.gs.</div>
+        </div>`;
+    });
+})();
+</script>

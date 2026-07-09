@@ -1,0 +1,27 @@
+<script>
+/* =========================================================================
+   FPI Intelligence Hub — Config
+   -------------------------------------------------------------------------
+   DATA_MODE controls where the app gets its data:
+
+     'mock'  → local sample catalog (not bundled in this deployment).
+
+     'gas'   → live data from Google Apps Script + Google Sheets.
+               Catalog comes from the master "Queries" tab (repo pages
+               are built by filtering its Repository column; only
+               Status = Production rows are served), repo cards from
+               "Repositories", filter pills from "Categories", and
+               favorites from "User Favorites" keyed by the user's
+               Google email.
+
+   You normally NEVER edit this file:
+   index.html sets `window.FPI_DATA_MODE = 'gas'` before this file loads,
+   so the deployed app always runs against the Google Sheet.
+   ========================================================================= */
+
+window.FPI = window.FPI || {};
+
+FPI.CONFIG = {
+  DATA_MODE: window.FPI_DATA_MODE || 'mock'
+};
+</script>
